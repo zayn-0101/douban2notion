@@ -48,6 +48,8 @@ class NotionHelper:
                 notion_token = os.getenv("BOOK_NOTION_TOKEN")
         self.client = Client(auth=notion_token, log_level=logging.ERROR)
         self.__cache = {}
+        # 默认值，避免页面中不存在热力图 embed 块时抛 AttributeError
+        self.heatmap_block_id = None
         self.page_id = self.extract_page_id(page_url)
         self.search_database(self.page_id)
         for key in self.database_name_dict.keys():
@@ -116,7 +118,13 @@ class NotionHelper:
                     child.get("child_database").get("title")
                 ] = child.get("id")
             elif child["type"] == "embed" and child.get("embed").get("url"):
-                if "heatmap" in child.get("embed").get("url"):
+                embed_url = child.get("embed").get("url")
+                # 兼容三代 URL：heatmap.malinkang.com(旧) / OUT_FOLDER(产物分支) /
+                # .notionhub-artifacts(7-27 重构版)
+                if any(
+                    keyword in embed_url
+                    for keyword in ("heatmap", "OUT_FOLDER", "notionhub-artifacts")
+                ):
                     self.heatmap_block_id = child.get("id")
             # 如果子块有子块，递归调用函数
             if "has_children" in child and child["has_children"]:

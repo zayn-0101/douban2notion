@@ -22,6 +22,10 @@ jobs:
         YEAR: ${{ vars.YEAR }}
         REF: ${{ github.ref }}
         REPOSITORY: ${{ github.repository }}
+        # 热力图产物分支/目录，需与下方 push 步骤保持一致
+        ARTIFACT_BRANCH: heatmap-artifacts
+        NOTIONHUB_ARTIFACT_ROOT: OUT_FOLDER
+        NOTIONHUB_ARTIFACT_PATH: OUT_FOLDER
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -73,6 +77,12 @@ jobs:
           cp -R OUT_FOLDER/. "$WORK_DIR/repo/OUT_FOLDER/" 2>/dev/null || true
 
           cd "$WORK_DIR/repo"
-          git add OUT_FOLDER
+          # 每个类型只保留最近 KEEP 个热力图，避免产物分支无限膨胀
+          KEEP=3
+          for d in OUT_FOLDER/*/; do
+            [ -d "$d" ] || continue
+            ls -1 "$d"*.svg 2>/dev/null | sort | head -n "-$KEEP" | xargs -r rm -f
+          done
+          git add -A OUT_FOLDER
           git commit -m 'update heatmap artifacts' || echo "nothing to commit"
           git push origin "HEAD:$ARTIFACT_BRANCH" || echo "nothing to push"
