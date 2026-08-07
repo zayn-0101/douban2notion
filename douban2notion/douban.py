@@ -171,8 +171,6 @@ def insert_movie(douban_name,notion_helper):
         seen.add(key)
         dedup.append(r)
     results = dedup
-    imdb_found = 0
-    missing_imdb = 0
     for result in results:
         movie = {}
         if not result:
@@ -199,8 +197,6 @@ def insert_movie(douban_name,notion_helper):
                 or notion_movive.get("状态") != movie.get("状态")
                 or notion_movive.get("评分") != movie.get("评分")
                 or not notion_movive.get("演员")
-                or not notion_movive.get("IMDB")
-                or notion_movive.get("IMDB") == "N/A"  # 清理历史误标
             ):
                 if not notion_movive.get("演员") and subject.get("actors"):
                     l = []
@@ -217,16 +213,6 @@ def insert_movie(douban_name,notion_helper):
                         )
                         for x in actors
                     ]
-                if not notion_movive.get("IMDB") or notion_movive.get("IMDB") == "N/A":
-                    # 豆瓣 API 无 imdb 字段，走 IMDb 官方搜索接口补（中文片名可搜）；
-                    # 取不到则清掉历史 N/A 标记（保持空值，下轮再试）
-                    imdb = subject.get("imdb_id") or fetch_imdb_id(subject)
-                    if imdb:
-                        movie["IMDB"] = imdb
-                        imdb_found += 1
-                    elif notion_movive.get("IMDB") == "N/A":
-                        movie["IMDB"] = ""
-                    missing_imdb += 1
                 properties = utils.get_properties(movie, movie_properties_type_dict)
                 print(movie.get("电影名"))
                 notion_helper.get_date_relation(properties,create_time)
@@ -283,7 +269,6 @@ def insert_movie(douban_name,notion_helper):
             notion_helper.create_page(
                 parent=parent, properties=properties, icon=get_icon(cover)
             )
-    print(f"IMDB 补齐统计: {imdb_found}/{missing_imdb}")
 
 
 def insert_book(douban_name,notion_helper):
