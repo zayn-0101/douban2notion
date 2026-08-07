@@ -193,16 +193,23 @@ def insert_movie(douban_name,notion_helper):
             movie["短评"] = result.get("comment")
         if notion_movie_dict.get(movie.get("豆瓣链接")):
             notion_movive = notion_movie_dict.get(movie.get("豆瓣链接"))
-            cover = subject.get("pic").get("normal")
-            if not cover.endswith('.webp'):
-                cover = cover.rsplit('.', 1)[0] + '.webp'
-            # 封面增量：Notion 里已是 file_upload id（非 http 开头）则跳过上传，直接复用
-            notion_cover = notion_movive.get("封面") or ""
-            if notion_cover.startswith("http"):
-                cover_id = notion_helper.upload_cover(cover)
-                movie["封面"] = cover_id
+            cover = (subject.get("pic") or {}).get("normal") or ""
+            if not cover:
+                # 豆瓣无封面图：不动 Notion 封面
+                movie.pop("封面", None)
             else:
-                movie["封面"] = notion_cover
+                if not cover.endswith('.webp'):
+                    cover = cover.rsplit('.', 1)[0] + '.webp'
+                # 封面增量：Notion 里已是 file_upload id（非 http 开头）则跳过上传，直接复用
+                notion_cover = notion_movive.get("封面") or ""
+                if not notion_cover or notion_cover.startswith("http"):
+                    cover_id = notion_helper.upload_cover(cover)
+                    if cover_id:
+                        movie["封面"] = cover_id
+                    else:
+                        movie.pop("封面", None)
+                else:
+                    movie["封面"] = notion_cover
             if (
                 notion_movive.get("日期") != movie.get("日期")
                 or notion_movive.get("短评") != movie.get("短评")
@@ -232,17 +239,19 @@ def insert_movie(douban_name,notion_helper):
                 notion_helper.update_page(
                     page_id=notion_movive.get("page_id"),
                     properties=properties,
-                    icon=get_icon(movie.get("封面"))
+                    icon=get_icon(movie.get("封面")) if movie.get("封面") else None
             )
                 updated += 1
 
         else:
             print(f"插入{movie.get('电影名')}")
-            cover = subject.get("pic").get("normal")
-            if not cover.endswith('.webp'):
-                cover = cover.rsplit('.', 1)[0] + '.webp'
-            cover_id = notion_helper.upload_cover(cover)
-            movie["封面"] = cover_id
+            cover = (subject.get("pic") or {}).get("normal") or ""
+            if cover:
+                if not cover.endswith('.webp'):
+                    cover = cover.rsplit('.', 1)[0] + '.webp'
+                cover_id = notion_helper.upload_cover(cover)
+                if cover_id:
+                    movie["封面"] = cover_id
             movie["类型"] = subject.get("type")
             imdb = subject.get("imdb_id") or fetch_imdb_id(subject)
             if imdb:
@@ -283,7 +292,7 @@ def insert_movie(douban_name,notion_helper):
                 "type": "database_id",
             }
             notion_helper.create_page(
-                parent=parent, properties=properties, icon=get_icon(cover_id)
+                parent=parent, properties=properties, icon=get_icon(movie.get("封面")) if movie.get("封面") else None
             )
     print(f"同步完成，更新 {updated} 条")
 
@@ -321,17 +330,19 @@ def insert_book(douban_name,notion_helper):
         book["日期"] = create_time.int_timestamp
         book["豆瓣链接"] = subject.get("url")
         book["状态"] = book_status.get(result.get("status"))
-        cover = subject.get("pic").get("large")
-        if not cover.endswith('.webp'):
-            cover = cover.rsplit('.', 1)[0] + '.webp'
-        # 封面增量：Notion 里已是 file_upload id（非 http 开头）则跳过上传，直接复用
-        notion_book = notion_book_dict.get(book.get("豆瓣链接"))
-        notion_cover = notion_book.get("封面") if notion_book else None
-        if notion_cover and not str(notion_cover).startswith("http"):
-            book["封面"] = notion_cover
-        else:
-            cover_id = notion_helper.upload_cover(cover)
-            book["封面"] = cover_id
+        cover = (subject.get("pic") or {}).get("large") or ""
+        if cover:
+            if not cover.endswith('.webp'):
+                cover = cover.rsplit('.', 1)[0] + '.webp'
+            # 封面增量：Notion 里已是 file_upload id（非 http 开头）则跳过上传，直接复用
+            notion_book = notion_book_dict.get(book.get("豆瓣链接"))
+            notion_cover = notion_book.get("封面") if notion_book else None
+            if notion_cover and not str(notion_cover).startswith("http"):
+                book["封面"] = notion_cover
+            else:
+                cover_id = notion_helper.upload_cover(cover)
+                if cover_id:
+                    book["封面"] = cover_id
         if result.get("rating"):
             book["评分"] = rating.get(result.get("rating").get("value"))
         if result.get("comment"):
@@ -352,7 +363,7 @@ def insert_book(douban_name,notion_helper):
                 notion_helper.update_page(
                     page_id=notion_movive.get("page_id"),
                     properties=properties,
-                    icon=get_icon(book.get("封面"))
+                    icon=get_icon(book.get("封面")) if book.get("封面") else None
             )
 
         else:
@@ -384,7 +395,7 @@ def insert_book(douban_name,notion_helper):
                 "type": "database_id",
             }
             notion_helper.create_page(
-                parent=parent, properties=properties, icon=get_icon(book.get("封面"))
+                parent=parent, properties=properties, icon=get_icon(book.get("封面")) if book.get("封面") else None
             )
 
      
