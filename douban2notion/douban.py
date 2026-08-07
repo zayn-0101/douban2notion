@@ -3,7 +3,6 @@ from email import feedparser
 import json
 import os
 import re
-from bs4 import BeautifulSoup
 import pendulum
 from retrying import retry
 import requests
@@ -91,12 +90,15 @@ def insert_movie(douban_name,notion_helper):
     results = []
     for i in movie_status.keys():
         results.extend(fetch_subjects(douban_name, "movie", i))
+    imdb_found = 0
     for result in results:
         movie = {}
         if not result:
             print(result)
             continue
         subject = result.get("subject")
+        if subject and subject.get("imdb_id"):
+            imdb_found += 1
         movie["电影名"] = subject.get("title")
         create_time = result.get("create_time")
         create_time = pendulum.parse(create_time,tz=utils.tz)
@@ -135,7 +137,9 @@ def insert_movie(douban_name,notion_helper):
                         for x in actors
                     ]
                 if not notion_movive.get("IMDB"):
-                    movie["IMDB"] = get_imdb(movie.get("豆瓣链接"))
+                    # 豆瓣网页已上 JS 反爬，抓取必失败；改用 API 自带的 imdb_id，
+                    # 没有则写 N/A 标记，避免每次同步重复尝试
+                    movie["IMDB"] = subject.get("imdb_id") or "N/A"
                 properties = utils.get_properties(movie, movie_properties_type_dict)
                 print(movie.get("电影名"))
                 notion_helper.get_date_relation(properties,create_time)
@@ -151,6 +155,8 @@ def insert_movie(douban_name,notion_helper):
                 cover = cover.rsplit('.', 1)[0] + '.webp'
             movie["封面"] = cover
             movie["类型"] = subject.get("type")
+            if subject.get("imdb_id"):
+                movie["IMDB"] = subject.get("imdb_id")
             if subject.get("genres"):
                 movie["分类"] = [
                     notion_helper.get_relation_id(
@@ -189,15 +195,8 @@ def insert_movie(douban_name,notion_helper):
             notion_helper.create_page(
                 parent=parent, properties=properties, icon=get_icon(cover)
             )
-def get_imdb(link):
-    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36'}
-    response = requests.get(link, headers=headers)
-    soup = BeautifulSoup(response.content)
-    info = soup.find(id='info')
-    if info:
-        for span in info.find_all('span', {'class': 'pl'}):
-            if ('IMDb:' == span.string):
-                return span.next_sibling.string.strip()
+    print(f"IMDB 命中统计: {imdb_found}/{len(results)}")
+
 
 def insert_book(douban_name,notion_helper):
     notion_books = notion_helper.query_all(database_id=notion_helper.book_database_id)
