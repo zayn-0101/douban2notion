@@ -3,6 +3,7 @@ from email import feedparser
 import json
 import os
 import re
+import urllib.parse
 import pendulum
 from retrying import retry
 import requests
@@ -70,21 +71,71 @@ def fetch_subjects(user, type_, status):
     return results
 
 
+def imdb_search(title, year):
+    """按片名搜 IMDb suggestion API，优先年份匹配，返回 tt 编号或 None"""
+    if not title:
+        return None
+    imdb_headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        query = urllib.parse.quote(title)
+        r = requests.get(
+            f"https://v3.sg.media-imdb.com/suggestion/t/{query}.json",
+            headers=imdb_headers,
+            timeout=10,
+        )
+        if not r.ok:
+            return None
+        items = r.json().get("d", [])
+    except Exception:
+        return None
+    # 优先年份匹配的影视条目
+    for it in items:
+        if not str(it.get("id", "")).startswith("tt"):
+            continue
+        if it.get("q") in ("person", "name"):
+            continue
+        if year and it.get("y") is not None and int(it.get("y")) == int(year):
+            return it["id"]
+    # 年份未匹配：取第一个影视条目兜底
+    for it in items:
+        if str(it.get("id", "")).startswith("tt") and it.get("q") not in ("person", "name"):
+            return it["id"]
+    return None
+
+
 @retry(stop_max_attempt_number=3, wait_fixed=5000)
-def fetch_subject_imdb(subject):
-    """通过 subject 详情接口获取 imdb_id（列表接口的 subject 不带该字段）"""
+def fetch_imdb_id(subject):
+    """获取 IMDb 编号：豆瓣片名（中文可搜）→ 未命中用 original_title 英文名再搜"""
     sid = subject.get("id")
-    stype = subject.get("type")
     if not sid:
         return None
-    # 剧集走 tv 接口，电影走 movie 接口
+    # 详情接口拿年份与原始标题（列表接口的 subject 不带 year/original_title）
+    stype = subject.get("type")
     api_type = "tv" if stype == "tv" else "movie"
-    url = f"https://{DOUBAN_API_HOST}/api/v2/{api_type}/{sid}"
-    params = {"apiKey": DOUBAN_API_KEY}
-    response = requests.get(url, headers=headers, params=params, timeout=10)
-    print(f"详情接口 {api_type}/{sid}: HTTP {response.status_code} {response.text[:120]}")
-    if response.ok:
-        return response.json().get("imdb_id")
+    title = subject.get("title")
+    original_title = None
+    year = None
+    try:
+        url = f"https://{DOUBAN_API_HOST}/api/v2/{api_type}/{sid}"
+        params = {"apiKey": DOUBAN_API_KEY}
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.ok:
+            data = response.json()
+            title = data.get("title") or title
+            original_title = data.get("original_title")
+            year = data.get("year")
+    except Exception:
+        pass
+    if not title:
+        return None
+    imdb = imdb_search(title, year)
+    if imdb:
+        return imdb
+    # 兜底：英文原名（处理 IMDb 中文索引缺失的条目）
+    if original_title and original_title != title:
+        return imdb_search(original_title, year)
     return None
 
 
@@ -167,9 +218,9 @@ def insert_movie(douban_name,notion_helper):
                         for x in actors
                     ]
                 if not notion_movive.get("IMDB") or notion_movive.get("IMDB") == "N/A":
-                    # 列表接口的 subject 不带 imdb_id，走详情接口取；
+                    # 豆瓣 API 无 imdb 字段，走 IMDb 官方搜索接口补（中文片名可搜）；
                     # 取不到则清掉历史 N/A 标记（保持空值，下轮再试）
-                    imdb = subject.get("imdb_id") or fetch_subject_imdb(subject)
+                    imdb = subject.get("imdb_id") or fetch_imdb_id(subject)
                     if imdb:
                         movie["IMDB"] = imdb
                         imdb_found += 1
@@ -191,8 +242,9 @@ def insert_movie(douban_name,notion_helper):
                 cover = cover.rsplit('.', 1)[0] + '.webp'
             movie["封面"] = cover
             movie["类型"] = subject.get("type")
-            if subject.get("imdb_id"):
-                movie["IMDB"] = subject.get("imdb_id")
+            imdb = subject.get("imdb_id") or fetch_imdb_id(subject)
+            if imdb:
+                movie["IMDB"] = imdb
             if subject.get("genres"):
                 movie["分类"] = [
                     notion_helper.get_relation_id(
