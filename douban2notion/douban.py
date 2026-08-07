@@ -250,17 +250,17 @@ def insert_movie(douban_name,notion_helper):
                     cover_id = notion_helper.upload_cover(cover)
                     if cover_id and not str(cover_id).startswith("http"):
                         movie["封面"] = cover_id
-                        cover_status = f"上传{str(cover_id)[:8]}"
+                        cover_status = "已上传"
                     elif cover_id:
                         movie["封面"] = cover_id
-                        cover_status = "外链"
+                        cover_status = "上传失败"
                     else:
                         movie.pop("封面", None)
-                        cover_status = "失败"
+                        cover_status = "上传失败"
                 else:
                     # 已是 Notion 托管：不写回（CDN URL 会过期），保持原样
                     movie.pop("封面", None)
-                    cover_status = f"已托管{str(notion_cover)[:12]}"
+                    cover_status = "已托管"
             seq += 1
             print(f"[{seq}] {movie.get('电影名')} | 封面:{cover_status}")
             if (
@@ -307,12 +307,12 @@ def insert_movie(douban_name,notion_helper):
                 cover_id = notion_helper.upload_cover(cover)
                 if cover_id and not str(cover_id).startswith("http"):
                     movie["封面"] = cover_id
-                    cover_status = f"上传{str(cover_id)[:8]}"
+                    cover_status = "已上传"
                 elif cover_id:
                     movie["封面"] = cover_id
-                    cover_status = "外链"
+                    cover_status = "上传失败"
                 else:
-                    cover_status = "失败"
+                    cover_status = "上传失败"
             else:
                 cover_status = "无图"
             seq += 1
@@ -405,17 +405,17 @@ def insert_book(douban_name,notion_helper):
             notion_cover = notion_book.get("封面") if notion_book else None
             if notion_cover and "doubanio.com" not in str(notion_cover):
                 book.pop("封面", None)
-                cover_status = f"已托管{str(notion_cover)[:12]}"
+                cover_status = "已托管"
             else:
                 cover_id = notion_helper.upload_cover(cover)
                 if cover_id and not str(cover_id).startswith("http"):
                     book["封面"] = cover_id
-                    cover_status = f"上传{str(cover_id)[:8]}"
+                    cover_status = "已上传"
                 elif cover_id:
                     book["封面"] = cover_id
-                    cover_status = "外链"
+                    cover_status = "上传失败"
                 else:
-                    cover_status = "失败"
+                    cover_status = "上传失败"
         else:
             cover_status = "无图"
         if result.get("rating"):
