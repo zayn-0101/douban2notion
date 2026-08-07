@@ -302,10 +302,15 @@ class NotionHelper:
             )
             create.raise_for_status()
             upload_id = create.json()["id"]
+            # Send 步骤要求 multipart/form-data（file 字段），不能用裸二进制；
+            # requests 的 files 参数会自动生成 boundary，勿手动设 Content-Type
             send = requests.post(
                 f"https://api.notion.com/v1/file_uploads/{upload_id}/send",
-                headers={**headers, "Content-Type": content_type},
-                data=content,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Notion-Version": "2022-06-28",
+                },
+                files={"file": ("cover.webp", content, content_type)},
                 timeout=60,
             )
             send.raise_for_status()
