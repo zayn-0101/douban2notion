@@ -105,13 +105,52 @@ def imdb_search(title, year):
     return None
 
 
+def extract_cn_title(raw):
+    """从豆瓣 title（'中文译名 原语言名 (年份)'）提取纯中文名。
+    保留季数（第二季/Part.2/LOST GIRLS 等），砍掉日文/韩文/英文原语言部分。"""
+    if not raw:
+        return None
+    t = re.sub(r"\s*\(\d{4}\)\s*$", "", raw).strip()
+    # 1. 日文假名 / 韩文 = 原语言起点；向前扩展紧邻汉字（僕の、進撃の 都属于原语言）
+    m = re.search(r"[\u3040-\u30ff\uac00-\ud7af]", t)
+    if m:
+        start = m.start()
+        while start > 0 and re.match(r"[\u4e00-\u9fff]", t[start - 1]):
+            start -= 1
+        # 假名前紧邻非空格非汉字（如 "Re:ゼロ" 的冒号）→ 是原语言前缀，再往前砍到空格
+        if start > 0 and t[start - 1] != " ":
+            cut = t.rfind(" ", 0, start)
+            start = cut + 1 if cut >= 0 else 0
+        return t[:start].strip() or None
+    # 2. 无假名/韩文：拉丁词分界（排除 Part.x 季号后缀；第一个词纯拉丁如 "Lady" 时不砍）
+    parts = t.split(" ")
+    if len(parts) > 1 and re.search(r"[\u4e00-\u9fff]", parts[0]):
+        for i in range(1, len(parts)):
+            if re.match(r"[A-Za-z]", parts[i]) and not parts[i].startswith("Part"):
+                return " ".join(parts[:i]).strip()
+    return t
+
+
 def fix_unknown_title(subject):
     """豆瓣 interests 列表接口对部分条目返回占位标题"未知电影/未知电视剧"（下架/特殊条目）。
-    用 j/subject（返回干净标题）优先，j/subject_abstract（带年份等完整信息）兜底，
-    把真实标题写回 subject["title"]。"""
+    用 j/subject_abstract（含中文译名）提取真实中文名，j/subject（原语言名）兜底。"""
     sid = subject.get("id")
     if not sid:
         return
+    try:
+        r = requests.get(
+            f"https://movie.douban.com/j/subject_abstract?subject_id={sid}",
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=10,
+        )
+        if r.ok:
+            sub = r.json().get("subject") or {}
+            title = extract_cn_title(sub.get("title"))
+            if title:
+                subject["title"] = title
+                return
+    except Exception:
+        pass
     try:
         r = requests.get(
             f"https://movie.douban.com/j/subject/{sid}/",
@@ -122,22 +161,6 @@ def fix_unknown_title(subject):
             data = r.json()
             if data.get("title"):
                 subject["title"] = data["title"]
-                return
-    except Exception:
-        pass
-    try:
-        r = requests.get(
-            f"https://movie.douban.com/j/subject_abstract?subject_id={sid}",
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
-            timeout=10,
-        )
-        if r.ok:
-            sub = r.json().get("subject") or {}
-            if sub.get("title"):
-                # 形如 "剑风传奇 剣風伝奇ベルセルク (1997)"，去掉年份括号部分
-                title = re.sub(r"\s*\(\d{4}\)\s*$", "", sub["title"]).strip()
-                if title:
-                    subject["title"] = title
     except Exception:
         pass
 
