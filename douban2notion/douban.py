@@ -154,6 +154,7 @@ def insert_movie(douban_name,notion_helper):
             "评分": movie.get("评分"),
             "演员": movie.get("演员"),
             "IMDB": movie.get("IMDB"),
+            "封面": movie.get("封面"),
             "page_id": i.get("id")
         }
     results = []
@@ -171,6 +172,8 @@ def insert_movie(douban_name,notion_helper):
         seen.add(key)
         dedup.append(r)
     results = dedup
+    imdb_found = 0
+    missing_imdb = 0
     for result in results:
         movie = {}
         if not result:
@@ -191,12 +194,20 @@ def insert_movie(douban_name,notion_helper):
             movie["短评"] = result.get("comment")
         if notion_movie_dict.get(movie.get("豆瓣链接")):
             notion_movive = notion_movie_dict.get(movie.get("豆瓣链接"))
+            cover = subject.get("pic").get("normal")
+            if not cover.endswith('.webp'):
+                cover = cover.rsplit('.', 1)[0] + '.webp'
+            cover_id = notion_helper.upload_cover(cover)
+            movie["封面"] = cover_id
             if (
                 notion_movive.get("日期") != movie.get("日期")
                 or notion_movive.get("短评") != movie.get("短评")
                 or notion_movive.get("状态") != movie.get("状态")
                 or notion_movive.get("评分") != movie.get("评分")
-                or (not notion_movive.get("演员") and subject.get("actors"))
+                or not notion_movive.get("演员")
+                or not notion_movive.get("IMDB")
+                or notion_movive.get("IMDB") == "N/A"  # 清理历史误标
+                or notion_movive.get("封面") != movie.get("封面")
             ):
                 if not notion_movive.get("演员") and subject.get("actors"):
                     l = []
@@ -213,12 +224,23 @@ def insert_movie(douban_name,notion_helper):
                         )
                         for x in actors
                     ]
+                if not notion_movive.get("IMDB") or notion_movive.get("IMDB") == "N/A":
+                    # 豆瓣 API 无 imdb 字段，走 IMDb 官方搜索接口补（中文片名可搜）；
+                    # 取不到则清掉历史 N/A 标记（保持空值，下轮再试）
+                    imdb = subject.get("imdb_id") or fetch_imdb_id(subject)
+                    if imdb:
+                        movie["IMDB"] = imdb
+                        imdb_found += 1
+                    elif notion_movive.get("IMDB") == "N/A":
+                        movie["IMDB"] = ""
+                    missing_imdb += 1
                 properties = utils.get_properties(movie, movie_properties_type_dict)
                 print(movie.get("电影名"))
                 notion_helper.get_date_relation(properties,create_time)
                 notion_helper.update_page(
                     page_id=notion_movive.get("page_id"),
-                    properties=properties
+                    properties=properties,
+                    icon=get_icon(cover_id)
             )
 
         else:
@@ -226,7 +248,8 @@ def insert_movie(douban_name,notion_helper):
             cover = subject.get("pic").get("normal")
             if not cover.endswith('.webp'):
                 cover = cover.rsplit('.', 1)[0] + '.webp'
-            movie["封面"] = cover
+            cover_id = notion_helper.upload_cover(cover)
+            movie["封面"] = cover_id
             movie["类型"] = subject.get("type")
             imdb = subject.get("imdb_id") or fetch_imdb_id(subject)
             if imdb:
@@ -267,8 +290,9 @@ def insert_movie(douban_name,notion_helper):
                 "type": "database_id",
             }
             notion_helper.create_page(
-                parent=parent, properties=properties, icon=get_icon(cover)
+                parent=parent, properties=properties, icon=get_icon(cover_id)
             )
+    print(f"IMDB 补齐统计: {imdb_found}/{missing_imdb}")
 
 
 def insert_book(douban_name,notion_helper):
@@ -307,7 +331,8 @@ def insert_book(douban_name,notion_helper):
         cover = subject.get("pic").get("large")
         if not cover.endswith('.webp'):
             cover = cover.rsplit('.', 1)[0] + '.webp'
-        book["封面"] = cover
+        cover_id = notion_helper.upload_cover(cover)
+        book["封面"] = cover_id
         if result.get("rating"):
             book["评分"] = rating.get(result.get("rating").get("value"))
         if result.get("comment"):
@@ -327,7 +352,8 @@ def insert_book(douban_name,notion_helper):
                 notion_helper.get_date_relation(properties,create_time)
                 notion_helper.update_page(
                     page_id=notion_movive.get("page_id"),
-                    properties=properties
+                    properties=properties,
+                    icon=get_icon(cover_id)
             )
 
         else:
@@ -359,7 +385,7 @@ def insert_book(douban_name,notion_helper):
                 "type": "database_id",
             }
             notion_helper.create_page(
-                parent=parent, properties=properties, icon=get_icon(cover)
+                parent=parent, properties=properties, icon=get_icon(cover_id)
             )
 
      
@@ -375,5 +401,6 @@ def main():
         insert_movie(douban_name,notion_helper)
     else:
         insert_book(douban_name,notion_helper)
+    notion_helper.save_cover_map()
 if __name__ == "__main__":
     main()

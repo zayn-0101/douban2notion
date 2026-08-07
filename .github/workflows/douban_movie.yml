@@ -86,3 +86,14 @@ jobs:
           git add -A OUT_FOLDER
           git commit -m 'update heatmap artifacts' || echo "nothing to commit"
           git push origin "HEAD:$ARTIFACT_BRANCH" || echo "nothing to push"
+      - name: Save cover map
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f cover_map.json ]; then
+            git config --global user.email "action@github.com"
+            git config --global user.name "GitHub Action"
+            git add cover_map.json
+            git commit -m 'update cover_map' || echo "nothing to commit"
+            git push origin HEAD:main || echo "nothing to push"
+          fi

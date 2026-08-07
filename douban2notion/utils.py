@@ -88,7 +88,10 @@ def get_date(start, end=None):
 
 
 def get_icon(url):
-    return {"type": "external", "external": {"url": url}}
+    # 兼容 file_upload id（自托管封面）与 http(s) 外链（图标等）
+    if isinstance(url, str) and url.startswith("http"):
+        return {"type": "external", "external": {"url": url}}
+    return {"type": "file_upload", "file_upload": {"id": url}}
 
 
 def get_select(name):
@@ -241,7 +244,10 @@ def get_properties(dict1, dict2):
         elif type == STATUS:
             property = {"status": {"name": value}}
         elif type == FILES:
-            property = {"files": [{"type": "external", "name": "Cover", "external": {"url": value}}]}
+            if isinstance(value, str) and value.startswith("http"):
+                property = {"files": [{"type": "external", "name": "Cover", "external": {"url": value}}]}
+            else:
+                property = {"files": [{"type": "file_upload", "name": "Cover", "file_upload": {"id": value}}]}
         elif type == DATE:
             property = {
                 "date": {
@@ -279,10 +285,13 @@ def get_property_value(property):
         return content.get("name")
     elif type == "files":
         # 不考虑多文件情况
-        if len(content) > 0 and content[0].get("type") == "external":
-            return content[0].get("external").get("url")
-        else:
-            return None
+        if len(content) > 0:
+            f = content[0]
+            if f.get("type") == "external":
+                return f.get("external").get("url")
+            if f.get("type") == "file_upload":
+                return f.get("file_upload").get("id")
+        return None
     elif type == "date":
         return str_to_timestamp(content.get("start"))
     else:
@@ -342,9 +351,6 @@ def str_to_timestamp(date_str):
         print(f"⚠️  无法解析日期 '{date_str}': {type(e).__name__}")
         return 0
 
-def upload_cover(url):
-    """Use the upstream cover directly so free runs need no asset worker."""
-    return url
-
 def get_embed(url):
     return {"type": "embed", "embed": {"url": url}}
+
