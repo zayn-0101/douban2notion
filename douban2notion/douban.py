@@ -70,6 +70,20 @@ def fetch_subjects(user, type_, status):
     return results
 
 
+@retry(stop_max_attempt_number=3, wait_fixed=5000)
+def fetch_subject_imdb(subject):
+    """通过 subject 详情接口获取 imdb_id（列表接口的 subject 不带该字段）"""
+    sid = subject.get("id")
+    if not sid:
+        return None
+    url = f"https://{DOUBAN_API_HOST}/api/v2/movie/{sid}"
+    params = {"apiKey": DOUBAN_API_KEY}
+    response = requests.get(url, headers=headers, params=params, timeout=10)
+    if response.ok:
+        return response.json().get("imdb_id")
+    return None
+
+
 
 def insert_movie(douban_name,notion_helper):
     notion_movies = notion_helper.query_all(database_id=notion_helper.movie_database_id)
@@ -90,15 +104,26 @@ def insert_movie(douban_name,notion_helper):
     results = []
     for i in movie_status.keys():
         results.extend(fetch_subjects(douban_name, "movie", i))
+    # 按 subject id 去重，避免豆瓣接口返回重复条目
+    seen = set()
+    dedup = []
+    for r in results:
+        if not r:
+            continue
+        key = (r.get("subject") or {}).get("id")
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(r)
+    results = dedup
     imdb_found = 0
+    missing_imdb = 0
     for result in results:
         movie = {}
         if not result:
             print(result)
             continue
         subject = result.get("subject")
-        if subject and subject.get("imdb_id"):
-            imdb_found += 1
         movie["电影名"] = subject.get("title")
         create_time = result.get("create_time")
         create_time = pendulum.parse(create_time,tz=utils.tz)
@@ -136,10 +161,14 @@ def insert_movie(douban_name,notion_helper):
                         )
                         for x in actors
                     ]
-                if not notion_movive.get("IMDB"):
-                    # 豆瓣网页已上 JS 反爬，抓取必失败；改用 API 自带的 imdb_id，
-                    # 没有则写 N/A 标记，避免每次同步重复尝试
-                    movie["IMDB"] = subject.get("imdb_id") or "N/A"
+                if not notion_movive.get("IMDB") or notion_movive.get("IMDB") == "N/A":
+                    # 列表接口的 subject 不带 imdb_id，走详情接口取；
+                    # 取不到也不写占位标记，保持空值下次再试（详情接口单次很快）
+                    imdb = subject.get("imdb_id") or fetch_subject_imdb(subject)
+                    if imdb:
+                        movie["IMDB"] = imdb
+                        imdb_found += 1
+                    missing_imdb += 1
                 properties = utils.get_properties(movie, movie_properties_type_dict)
                 print(movie.get("电影名"))
                 notion_helper.get_date_relation(properties,create_time)
@@ -195,7 +224,7 @@ def insert_movie(douban_name,notion_helper):
             notion_helper.create_page(
                 parent=parent, properties=properties, icon=get_icon(cover)
             )
-    print(f"IMDB 命中统计: {imdb_found}/{len(results)}")
+    print(f"IMDB 补齐统计: {imdb_found}/{missing_imdb}")
 
 
 def insert_book(douban_name,notion_helper):
