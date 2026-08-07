@@ -74,11 +74,15 @@ def fetch_subjects(user, type_, status):
 def fetch_subject_imdb(subject):
     """通过 subject 详情接口获取 imdb_id（列表接口的 subject 不带该字段）"""
     sid = subject.get("id")
+    stype = subject.get("type")
     if not sid:
         return None
-    url = f"https://{DOUBAN_API_HOST}/api/v2/movie/{sid}"
+    # 剧集走 tv 接口，电影走 movie 接口
+    api_type = "tv" if stype == "tv" else "movie"
+    url = f"https://{DOUBAN_API_HOST}/api/v2/{api_type}/{sid}"
     params = {"apiKey": DOUBAN_API_KEY}
     response = requests.get(url, headers=headers, params=params, timeout=10)
+    print(f"详情接口 {api_type}/{sid}: HTTP {response.status_code} {response.text[:120]}")
     if response.ok:
         return response.json().get("imdb_id")
     return None
@@ -145,6 +149,7 @@ def insert_movie(douban_name,notion_helper):
                 or notion_movive.get("评分") != movie.get("评分")
                 or not notion_movive.get("演员")
                 or not notion_movive.get("IMDB")
+                or notion_movive.get("IMDB") == "N/A"  # 清理历史误标
             ):
                 if not notion_movive.get("演员") and subject.get("actors"):
                     l = []
@@ -163,11 +168,13 @@ def insert_movie(douban_name,notion_helper):
                     ]
                 if not notion_movive.get("IMDB") or notion_movive.get("IMDB") == "N/A":
                     # 列表接口的 subject 不带 imdb_id，走详情接口取；
-                    # 取不到也不写占位标记，保持空值下次再试（详情接口单次很快）
+                    # 取不到则清掉历史 N/A 标记（保持空值，下轮再试）
                     imdb = subject.get("imdb_id") or fetch_subject_imdb(subject)
                     if imdb:
                         movie["IMDB"] = imdb
                         imdb_found += 1
+                    elif notion_movive.get("IMDB") == "N/A":
+                        movie["IMDB"] = ""
                     missing_imdb += 1
                 properties = utils.get_properties(movie, movie_properties_type_dict)
                 print(movie.get("电影名"))
