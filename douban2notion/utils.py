@@ -291,6 +291,9 @@ def get_property_value(property):
                 return f.get("external").get("url")
             if f.get("type") == "file_upload":
                 return f.get("file_upload").get("id")
+            if f.get("type") == "file":
+                # API 上传的文件挂载后查询返回 file 类型（Notion 托管，带临时 URL）
+                return f.get("file").get("url")
         return None
     elif type == "date":
         return str_to_timestamp(content.get("start"))

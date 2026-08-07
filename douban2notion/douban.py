@@ -105,6 +105,43 @@ def imdb_search(title, year):
     return None
 
 
+def fix_unknown_title(subject):
+    """豆瓣 interests 列表接口对部分条目返回占位标题"未知电影/未知电视剧"（下架/特殊条目）。
+    用 j/subject（返回干净标题）优先，j/subject_abstract（带年份等完整信息）兜底，
+    把真实标题写回 subject["title"]。"""
+    sid = subject.get("id")
+    if not sid:
+        return
+    try:
+        r = requests.get(
+            f"https://movie.douban.com/j/subject/{sid}/",
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=10,
+        )
+        if r.ok:
+            data = r.json()
+            if data.get("title"):
+                subject["title"] = data["title"]
+                return
+    except Exception:
+        pass
+    try:
+        r = requests.get(
+            f"https://movie.douban.com/j/subject_abstract?subject_id={sid}",
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=10,
+        )
+        if r.ok:
+            sub = r.json().get("subject") or {}
+            if sub.get("title"):
+                # 形如 "剑风传奇 剣風伝奇ベルセルク (1997)"，去掉年份括号部分
+                title = re.sub(r"\s*\(\d{4}\)\s*$", "", sub["title"]).strip()
+                if title:
+                    subject["title"] = title
+    except Exception:
+        pass
+
+
 @retry(stop_max_attempt_number=3, wait_fixed=5000)
 def fetch_imdb_id(subject):
     """获取 IMDb 编号：豆瓣片名（中文可搜）→ 未命中用 original_title 英文名再搜"""
@@ -148,6 +185,7 @@ def insert_movie(douban_name,notion_helper):
         for key, value in i.get("properties").items():
             movie[key] = utils.get_property_value(value)
         notion_movie_dict[movie.get("豆瓣链接")] = {
+            "电影名": movie.get("电影名"),
             "短评": movie.get("短评"),
             "状态": movie.get("状态"),
             "日期": movie.get("日期"),
@@ -173,12 +211,16 @@ def insert_movie(douban_name,notion_helper):
         dedup.append(r)
     results = dedup
     updated = 0
+    seq = 0
     for result in results:
         movie = {}
         if not result:
             print(result)
             continue
         subject = result.get("subject")
+        # 豆瓣列表接口对下架/特殊条目返回占位标题，用 j/subject 补真实标题
+        if subject and subject.get("title") in ("未知电影", "未知电视剧"):
+            fix_unknown_title(subject)
         movie["电影名"] = subject.get("title")
         create_time = result.get("create_time")
         create_time = pendulum.parse(create_time,tz=utils.tz)
@@ -197,26 +239,41 @@ def insert_movie(douban_name,notion_helper):
             if not cover:
                 # 豆瓣无封面图：不动 Notion 封面
                 movie.pop("封面", None)
+                cover_status = "无图"
             else:
                 if not cover.endswith('.webp'):
                     cover = cover.rsplit('.', 1)[0] + '.webp'
-                # 封面增量：Notion 里已是 file_upload id（非 http 开头）则跳过上传，直接复用
+                # 封面增量：Notion 里已是托管（file_upload id 或 Notion CDN url）则跳过上传；
+                # 只有豆瓣外链（doubanio.com）或空封面才需要上传迁移
                 notion_cover = notion_movive.get("封面") or ""
-                if not notion_cover or notion_cover.startswith("http"):
+                if not notion_cover or "doubanio.com" in notion_cover:
                     cover_id = notion_helper.upload_cover(cover)
-                    if cover_id:
+                    if cover_id and not str(cover_id).startswith("http"):
                         movie["封面"] = cover_id
+                        cover_status = f"上传{str(cover_id)[:8]}"
+                    elif cover_id:
+                        movie["封面"] = cover_id
+                        cover_status = "外链"
                     else:
                         movie.pop("封面", None)
+                        cover_status = "失败"
                 else:
-                    movie["封面"] = notion_cover
+                    # 已是 Notion 托管：不写回（CDN URL 会过期），保持原样
+                    movie.pop("封面", None)
+                    cover_status = f"已托管{str(notion_cover)[:12]}"
+            seq += 1
+            print(f"[{seq}] {movie.get('电影名')} | 封面:{cover_status}")
             if (
                 notion_movive.get("日期") != movie.get("日期")
                 or notion_movive.get("短评") != movie.get("短评")
                 or notion_movive.get("状态") != movie.get("状态")
                 or notion_movive.get("评分") != movie.get("评分")
                 or (not notion_movive.get("演员") and subject.get("actors"))
-                or notion_movive.get("封面") != movie.get("封面")
+                or (
+                    notion_movive.get("电影名") in ("未知电影", "未知电视剧")
+                    and movie.get("电影名") not in ("未知电影", "未知电视剧", None)
+                )
+                or (movie.get("封面") and notion_movive.get("封面") != movie.get("封面"))
             ):
                 if not notion_movive.get("演员") and subject.get("actors"):
                     l = []
@@ -234,7 +291,6 @@ def insert_movie(douban_name,notion_helper):
                         for x in actors
                     ]
                 properties = utils.get_properties(movie, movie_properties_type_dict)
-                print(movie.get("电影名"))
                 notion_helper.get_date_relation(properties,create_time)
                 notion_helper.update_page(
                     page_id=notion_movive.get("page_id"),
@@ -244,14 +300,23 @@ def insert_movie(douban_name,notion_helper):
                 updated += 1
 
         else:
-            print(f"插入{movie.get('电影名')}")
             cover = (subject.get("pic") or {}).get("normal") or ""
             if cover:
                 if not cover.endswith('.webp'):
                     cover = cover.rsplit('.', 1)[0] + '.webp'
                 cover_id = notion_helper.upload_cover(cover)
-                if cover_id:
+                if cover_id and not str(cover_id).startswith("http"):
                     movie["封面"] = cover_id
+                    cover_status = f"上传{str(cover_id)[:8]}"
+                elif cover_id:
+                    movie["封面"] = cover_id
+                    cover_status = "外链"
+                else:
+                    cover_status = "失败"
+            else:
+                cover_status = "无图"
+            seq += 1
+            print(f"[{seq}] {movie.get('电影名')} | 封面:{cover_status} | 插入")
             movie["类型"] = subject.get("type")
             imdb = subject.get("imdb_id") or fetch_imdb_id(subject)
             if imdb:
@@ -317,6 +382,7 @@ def insert_book(douban_name,notion_helper):
     results = []
     for i in book_status.keys():
         results.extend(fetch_subjects(douban_name, "book", i))
+    seq = 0
     for result in results:
         book = {}
         if not result:
@@ -334,30 +400,40 @@ def insert_book(douban_name,notion_helper):
         if cover:
             if not cover.endswith('.webp'):
                 cover = cover.rsplit('.', 1)[0] + '.webp'
-            # 封面增量：Notion 里已是 file_upload id（非 http 开头）则跳过上传，直接复用
+            # 封面增量：Notion 里已是托管（file_upload id 或 Notion CDN url）则跳过上传
             notion_book = notion_book_dict.get(book.get("豆瓣链接"))
             notion_cover = notion_book.get("封面") if notion_book else None
-            if notion_cover and not str(notion_cover).startswith("http"):
-                book["封面"] = notion_cover
+            if notion_cover and "doubanio.com" not in str(notion_cover):
+                book.pop("封面", None)
+                cover_status = f"已托管{str(notion_cover)[:12]}"
             else:
                 cover_id = notion_helper.upload_cover(cover)
-                if cover_id:
+                if cover_id and not str(cover_id).startswith("http"):
                     book["封面"] = cover_id
+                    cover_status = f"上传{str(cover_id)[:8]}"
+                elif cover_id:
+                    book["封面"] = cover_id
+                    cover_status = "外链"
+                else:
+                    cover_status = "失败"
+        else:
+            cover_status = "无图"
         if result.get("rating"):
             book["评分"] = rating.get(result.get("rating").get("value"))
         if result.get("comment"):
             book["短评"] = result.get("comment")
         if notion_book_dict.get(book.get("豆瓣链接")):
             notion_movive = notion_book_dict.get(book.get("豆瓣链接"))
+            seq += 1
+            print(f"[{seq}] {book.get('书名')} | 封面:{cover_status}")
             if (
                 notion_movive.get("封面") is None
-                or notion_movive.get("封面") != book.get("封面")
+                or (book.get("封面") and notion_movive.get("封面") != book.get("封面"))
                 or notion_movive.get("日期") != book.get("日期")
                 or notion_movive.get("短评") != book.get("短评")
                 or notion_movive.get("状态") != book.get("状态")
                 or notion_movive.get("评分") != book.get("评分")
             ):
-                print(f"更新{book.get('书名')}")
                 properties = utils.get_properties(book, book_properties_type_dict)
                 notion_helper.get_date_relation(properties,create_time)
                 notion_helper.update_page(
@@ -367,7 +443,8 @@ def insert_book(douban_name,notion_helper):
             )
 
         else:
-            print(f"插入{book.get('书名')}")
+            seq += 1
+            print(f"[{seq}] {book.get('书名')} | 封面:{cover_status} | 插入")
             book["简介"] = subject.get("intro")
             press = []
             for i in subject.get("press"):

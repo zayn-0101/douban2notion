@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import json
+import time
 import requests
 
 from notion_client import Client
@@ -314,8 +315,10 @@ class NotionHelper:
                 timeout=60,
             )
             send.raise_for_status()
+            # Notion 文件处理是异步的：send 后文件短暂 pending，立即引用会 400。
+            # 等待片刻让文件变为 uploaded 状态再返回。
+            time.sleep(2)
             self.cover_map[url] = upload_id
-            print(f"封面已上传 Notion: {upload_id}")
             return upload_id
         except Exception as e:
             print(f"⚠️ 封面上传失败，回退外链: {e}")
